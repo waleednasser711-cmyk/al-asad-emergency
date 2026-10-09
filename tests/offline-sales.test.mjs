@@ -1,0 +1,28 @@
+import assert from 'node:assert/strict';
+import {blank,apply,visible} from '../lib/business.ts';
+import {localSale,pendingSales,projectSales,postOfflineSale,parseQueueBackup} from '../lib/offline-sales.ts';
+import {accountSalesSummary} from '../lib/sales-summary.ts';
+import {validateBackup} from '../lib/backup.ts';
+const admin={id:'admin',name:'مدير',role:'admin'},rep={id:'r',name:'مندوب',role:'rep',priceTier:'retail',active:1},users=[admin,rep];
+let s=blank();const run=b=>apply(s,admin,b,[rep.id]);
+run({action:'product',name:'صنف',code:'p',pack:4,piecePrice:10,cartonPrice:40,cost:5,minimum:0});const product=s.products[0];
+run({action:'customer',name:'عميل',code:'c'});const customer=s.customers[0];
+run({action:'stock',repId:rep.id,productId:product.id,quantity:40,reason:'افتتاحي'});
+const data=()=>({user:rep,revision:1,state:visible(s,rep)}),body=(payment='cash',quantity=1,paid=0)=>({action:'sale',customerId:customer.id,payment,paid,lines:[{productId:product.id,quantity,unit:'carton',price:40}]});
+const before=structuredClone(s),q=localSale(data(),body(),crypto.randomUUID());assert.deepEqual(s,before);
+const local=projectSales(data(),[q]);assert.equal(local.state.stocks.r[product.id],36);assert.equal(local.state.cash.r,4000);assert.equal(local.state.customers[0].debt,0);assert.equal(accountSalesSummary(local.state,'r').netSales,4000);assert.match(q.receipt.number,/محلي-/);
+const credit=localSale(local,body('credit',2,5),crypto.randomUUID());const both=projectSales(data(),[q,credit]);assert.equal(both.state.stocks.r[product.id],28);assert.equal(both.state.cash.r,4500);assert.equal(both.state.customers[0].debt,7500);assert.equal(accountSalesSummary(both.state,'r').netSales,12000);
+assert.throws(()=>localSale(both,body('cash',8),crypto.randomUUID()),/غير كاف/);
+const doc=postOfflineSale(s,rep,q.payload,['r']);doc.offlineFingerprint='test';assert.equal(doc.total,q.receipt.total);assert.equal(doc.lines[0].cost,2000);assert.equal(doc.at,q.payload.createdAt);
+assert.equal(pendingSales(data(),[q,credit]).length,1);const lostResponse=projectSales(data(),[q,credit]);assert.equal(lostResponse.state.cash.r,4500);assert.equal(lostResponse.state.stocks.r[product.id],28);
+// Server-only acknowledgments still reconcile receipts no longer visible after reassignment.
+const hidden=data();hidden.state.documents=[];hidden.syncedSaleIds=[q.id];assert.equal(pendingSales(hidden,[q]).length,0);
+const revoked=data();revoked.state.salesAccounting.days['2026-10-01']={sales:5000,returns:1000,netSales:4000,invoices:1,returnInvoices:1};assert.equal(accountSalesSummary(projectSales(revoked,[]).state,'r').netSales,8000);
+const backup={format:'asad-offline-sales-v1',actorId:'r',sales:[q,credit]};assert.equal(parseQueueBackup(backup,'r').length,2);assert.throws(()=>parseQueueBackup(backup,'another'));const corrupted=structuredClone(backup);corrupted.sales[0].receipt.total++;assert.throws(()=>parseQueueBackup(corrupted,'r'));
+const insufficient=structuredClone(s);insufficient.stocks.r[product.id]=0;assert.throws(()=>postOfflineSale(insufficient,rep,credit.payload,['r']),/غير كاف/);assert.equal(insufficient.cash.r,s.cash.r);assert.equal(insufficient.customers[0].debt,s.customers[0].debt);
+const price=structuredClone(s);price.products[0].cartonPrice++;assert.throws(()=>postOfflineSale(price,rep,credit.payload,['r']),/سعر/);
+const pack=structuredClone(s);pack.products[0].pack=5;assert.throws(()=>postOfflineSale(pack,rep,credit.payload,['r']),/تعبئة/);
+const assignment=structuredClone(s);assignment.products[0].repIds=[];assert.throws(()=>postOfflineSale(assignment,rep,credit.payload,['r']),/مخصص/);
+assert.throws(()=>postOfflineSale(structuredClone(s),{...rep,active:0},credit.payload,['r']),/موقوف/);
+const policy=structuredClone(s);policy.customers[0].creditEnabled=true;policy.customers[0].creditLimit=100;assert.throws(()=>postOfflineSale(structuredClone(policy),rep,credit.payload,['r']),/ائتماني/);const reviewed=postOfflineSale(policy,rep,credit.payload,['r'],admin,'مراجعة المدير');assert.equal(reviewed.actorId,'r');assert.equal(reviewed.reviewedBy,'admin');assert.equal(policy.cash.r,4500);assert.equal(policy.customers[0].debt,7500);
+validateBackup(s,users);console.log('PASS: offline cash/credit projection, local stock checks, lost acknowledgement dedupe, aggregate preservation, recovery validation, server price/pack/assignment/credit checks and original-date/rep posting');

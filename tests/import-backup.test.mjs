@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import XLSX from 'xlsx';
+import {zipSync,unzipSync,strToU8,strFromU8} from 'fflate';
+import {normalizeImport} from '../lib/imports.ts';
+import {blank,apply} from '../lib/business.ts';
+import {validateBackup} from '../lib/backup.ts';
+const a={id:'admin',name:'مدير',role:'admin'},s=blank();
+function workbookRows(rows){const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),'بيانات');const bytes=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});const read=XLSX.read(bytes,{type:'buffer'});return XLSX.utils.sheet_to_json(read.Sheets[read.SheetNames[0]],{defval:''});}
+const products=[{code:' P01 ',name:' صنف عربي ',pack:'12',piecePrice:'10.50',cartonPrice:120,cost:5,minimum:3,wholesalePiecePrice:8,wholesaleCartonPrice:90},{code:'P02',name:'ب',pack:1,piecePrice:1,cartonPrice:1,cost:0.3}];
+const rows=normalizeImport(workbookRows(products),'products');apply(s,a,{action:'import',kind:'products',rows},[]);assert.equal(s.products[0].code,'P01');assert.equal(s.products[0].piecePrice,1050);assert.equal(s.products[0].wholesaleCartonPrice,9000);assert.equal(s.products[1].wholesalePiecePrice,100);
+const customerRows=normalizeImport(workbookRows([{code:'C1',name:'عميل',phone:'01000000001',address:'القاهرة'}]),'customers');apply(s,a,{action:'import',kind:'customers',rows:customerRows},[]);assert.equal(s.customers[0].phone,'01000000001');
+apply(s,a,{action:'debt',id:s.customers[0].id,mode:'set',amount:123.45,reason:'افتتاحي'},[]);const customerId=s.customers[0].id;
+apply(s,a,{action:'import',kind:'customers',rows:[{code:'C1',name:'اسم جديد'}]},[]);assert.equal(s.customers.length,1);assert.equal(s.customers[0].id,customerId);assert.equal(s.customers[0].debt,12345);
+apply(s,a,{action:'import',kind:'products',rows:[{code:'P01',name:'اسم جديد',pack:12,piecePrice:11,cartonPrice:130,cost:5}]},[]);assert.equal(s.products.length,2);assert.equal(s.products[0].wholesaleCartonPrice,9000);
+for(const bad of [[],[{code:'X',name:'x'}],[{...products[0],pack:0}],[{...products[0],cost:-1}],[{...products[0],piecePrice:'abc'}],[{...products[0],minimum:0.5}],[{...products[0],code:' '}],[products[0],products[0]],[{...products[0],pack:1.5}]])assert.throws(()=>normalizeImport(bad,'products'));
+assert.throws(()=>normalizeImport([{code:'C',name:' '}],'customers'));assert.throws(()=>normalizeImport([{code:'C',name:'a'}],'unknown'));
+const bulk=Array.from({length:3000},(_,i)=>({code:'B'+i,name:'صنف '+i,pack:6,piecePrice:3,cartonPrice:15,cost:1}));const start=performance.now();const imported=normalizeImport(workbookRows(bulk),'products');assert.equal(imported.length,3000);assert.throws(()=>normalizeImport([...bulk,bulk[0]],'products'));const large=blank();apply(large,a,{action:'import',kind:'products',rows:imported},[]);assert.equal(large.products.length,3000);console.log('INFO: XLSX 3000-row read + validation + business import '+Math.round(performance.now()-start)+'ms');
+const meta={format:'asad-v1',createdAt:'2026-10-06T12:00:00Z',state:s,images:{proof:{path:'images/proof',mime:'image/png'}}};const bytes=Uint8Array.of(137,80,78,71,13,10,26,10);const zip=zipSync({'backup.json':strToU8(JSON.stringify(meta)),'images/proof':bytes});const unzipped=unzipSync(zip),restored=JSON.parse(strFromU8(unzipped['backup.json']));assert.deepEqual(restored,JSON.parse(JSON.stringify(meta)));assert.deepEqual(unzipped['images/proof'],bytes);assert.deepEqual(validateBackup(restored.state,[a]),JSON.parse(JSON.stringify(s)));
+for(const mutate of [x=>x.products.push({...x.products[0]}),x=>x.documents.push({...x.documents[0]}),x=>x.documents[0].at='invalid',x=>x.documents[0].customerId='absent',x=>x.cash.main=-1,x=>x.products[0].pack=0,x=>x.ledger.push({id:'l',at:'now',location:'unknown',amount:1,kind:'a',ref:'',actor:'a'})]){const bad=structuredClone(s);mutate(bad);assert.throws(()=>validateBackup(bad,[a]));}
+console.log('PASS: real XLSX round-trips, Arabic names, text phone zeros, price tiers, legacy import, upserts preserve IDs/debt, malformed and duplicate rows, 3000-row limit, ZIP/image round-trip, backup schema/reference/duplicate rejection');

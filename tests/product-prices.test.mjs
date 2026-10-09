@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {pieceFromCarton,updateProductPrices} from '../lib/product-prices.ts';
+import {blank,apply} from '../lib/business.ts';
+const a={id:'admin',role:'admin',name:'مدير'},s=blank();
+assert.equal(pieceFromCarton(120,12),10);assert.equal(pieceFromCarton(100,12),8.33);assert.equal(pieceFromCarton(100.01,3),33.34);assert.equal(pieceFromCarton(100,0),undefined);assert.equal(pieceFromCarton(-1,12),undefined);
+let form={pack:12,cartonPrice:120,piecePrice:11,wholesaleCartonPrice:90,wholesalePiecePrice:8};let next=updateProductPrices(form,'cartonPrice',144);assert.equal(next.piecePrice,12);assert.equal(next.wholesalePiecePrice,8);next=updateProductPrices(next,'wholesaleCartonPrice',84);assert.equal(next.wholesalePiecePrice,7);next=updateProductPrices(next,'piecePrice',13);assert.equal(next.piecePrice,13);next=updateProductPrices(next,'pack',6);assert.equal(next.piecePrice,24);assert.equal(next.wholesalePiecePrice,14);assert.deepEqual(updateProductPrices(form,'name','اسم').piecePrice,11);
+apply(s,a,{action:'product',code:'P',name:'صنف',pack:12,cartonPrice:120,wholesaleCartonPrice:90,cost:5},[]);assert.equal(s.products[0].piecePrice,1000);assert.equal(s.products[0].wholesalePiecePrice,750);
+apply(s,a,{action:'product',id:s.products[0].id,code:'P',name:'تعديل',pack:12,piecePrice:11,cartonPrice:120,wholesalePiecePrice:8,wholesaleCartonPrice:90,cost:5},[]);
+apply(s,a,{action:'product',id:s.products[0].id,code:'P',name:'اسم فقط',pack:12,cartonPrice:120,wholesaleCartonPrice:90,cost:5},[]);assert.equal(s.products[0].piecePrice,1100);assert.equal(s.products[0].wholesalePiecePrice,800);
+apply(s,a,{action:'stock',productId:s.products[0].id,quantity:12,reason:'افتتاحي'},[]);apply(s,a,{action:'customer',code:'C',name:'عميل'},[]);const invoice=apply(s,a,{action:'sale',customerId:s.customers[0].id,lines:[{productId:s.products[0].id,quantity:1,unit:'piece'}],payment:'credit'},[]);const original=structuredClone(invoice);
+apply(s,a,{action:'product',id:s.products[0].id,code:'P',name:'سعر جديد',pack:12,cartonPrice:144,wholesaleCartonPrice:84,cost:5},[]);assert.equal(s.products[0].piecePrice,1200);assert.equal(s.products[0].wholesalePiecePrice,700);assert.deepEqual(invoice,original);
+apply(s,a,{action:'import',kind:'products',rows:[{code:'I',name:'إكسيل',pack:10,cartonPrice:100,wholesaleCartonPrice:80,cost:4}]},[]);assert.equal(s.products[1].piecePrice,1000);assert.equal(s.products[1].wholesalePiecePrice,800);
+console.log('PASS: automatic retail/wholesale piece prices, rounding, pack recalculation, manual override, no recalculation on unrelated edits, optional Excel piece prices and unchanged historical invoices');

@@ -1,0 +1,3 @@
+// Currency rounding is in cents; carton and piece prices stay independently editable.
+export function pieceFromCarton(carton:any,pack:any){const price=Number(carton),count=Number(pack);if(!Number.isFinite(price)||price<0||!Number.isSafeInteger(count)||count<1)return undefined;return Math.round(Math.round(price*100)/count)/100;}
+export function updateProductPrices(form:any,key:string,value:any){const next={...form,[key]:value};if(['pack','cartonPrice'].includes(key)){const price=pieceFromCarton(next.cartonPrice,next.pack);if(price!==undefined)next.piecePrice=price;}if(['pack','wholesaleCartonPrice'].includes(key)){const price=pieceFromCarton(next.wholesaleCartonPrice,next.pack);if(price!==undefined)next.wholesalePiecePrice=price;}return next;}

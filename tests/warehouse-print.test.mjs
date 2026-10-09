@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {printableWarehouseDocument} from '../lib/warehouse-print.ts';
+const p={id:'p',pack:12},settings={name:'الشركة <script>alert(1)</script>',productCategories:[{id:'kazan',name:'كازان'}]},stocks={warehouse:{p:30}};
+const doc={id:'d',number:12,type:'stocktake',status:'pending',at:'2026-10-08T15:00:00Z',actorName:'مسؤول <img onerror=x>',counts:[{productId:'p',name:'صنف <b>x</b>',pack:12,cartons:2,loosePieces:4,expected:30,actual:28,cost:123456789}]};const before=structuredClone(doc);let html=printableWarehouseDocument(doc,settings,[p],stocks);
+assert.match(html,/بانتظار الاعتماد/);assert.match(html,/لا يغيّر الأرصدة/);assert.match(html,/class="shortage"/);assert.match(html,/عجز 2 قطعة/);assert.match(html,/28 قطعة \(2 كرتونة \+ 4 قطعة\)/);assert.ok(!html.includes('123456789'));assert.ok(!html.includes('<script>'));assert.ok(!html.includes('<img'));assert.ok(html.includes('&lt;b&gt;'));assert.deepEqual(doc,before);
+html=printableWarehouseDocument({...doc,status:'approved'},settings,[p],stocks);assert.match(html,/معتمد/);assert.ok(!html.includes('بانتظار الاعتماد'));
+html=printableWarehouseDocument(doc,settings,[p],{warehouse:{p:31}});assert.match(html,/تغير الرصيد أو التعبئة/);
+for(const type of ['load','carReturn','purchaseReceipt']){html=printableWarehouseDocument({type,number:1,status:'pending',at:doc.at,actorName:'مسؤول',externalInvoice:'EXT-1',lines:[{productId:'p',name:'صنف',code:'P1',quantity:2,unit:'carton',pieces:24,cost:456789,price:456789,total:456789}]},settings,[p],stocks,'المندوب');assert.match(html,/بانتظار الاعتماد/);assert.match(html,/24/);assert.match(html,/المندوب/);assert.ok(!html.includes('456789'));assert.ok(!html.includes('سعر الوحدة'));assert.ok(!html.includes('الإجمالي المالي'));}
+assert.throws(()=>printableWarehouseDocument({...doc,type:'sale'},settings,[p],stocks));
+console.log('PASS: pending/approved quantity-only warehouse printing, carton/piece breakdown, colored discrepancies, stale warning, safe escaped text and no prices or mutations');

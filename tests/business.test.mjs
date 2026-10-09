@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {blank,apply,visible} from '../lib/business.ts';
+const a={id:'admin',name:'المدير',role:'admin'},r={id:'rep1',name:'المندوب',role:'rep'},ids=['rep1'];
+let s=blank();const run=(who,b)=>{const candidate=structuredClone(s);const d=apply(candidate,who,b,ids);s=candidate;return d};
+run(a,{action:'product',name:'صنف',code:'P1',pack:12,piecePrice:10,cartonPrice:108,cost:5,minimum:3});const p=s.products[0].id;
+run(a,{action:'customer',name:'عميل',code:'C1'});const c=s.customers[0].id;
+run(a,{action:'supplier',name:'مورد',code:'S1'});const v=s.suppliers[0].id;
+run(a,{action:'stock',productId:p,quantity:120,reason:'افتتاحي'});
+run(a,{action:'cashOpening',amount:1000});
+const cart=(quantity,unit='carton',price)=>[{productId:p,quantity,unit,...(price!==undefined?{price}:{})}];
+const load=run(r,{action:'load',lines:cart(3)});assert.equal(s.stocks.warehouse[p],120);assert.equal(load.status,'pending');run(a,{action:'approve',id:load.id});assert.equal(s.stocks.warehouse[p],84);assert.equal(s.stocks.rep1[p],36);
+assert.throws(()=>run(a,{action:'approve',id:load.id}));
+const sale=run(r,{action:'sale',customerId:c,lines:cart(1),payment:'credit',paid:8});assert.equal(s.customers[0].debt,10000);assert.equal(s.cash.rep1,800);assert.equal(sale.lines[0].cost,6000);assert.equal(s.stocks.rep1[p],24);
+run(r,{action:'collection',customerId:c,amount:50});assert.equal(s.customers[0].debt,5000);assert.equal(s.cash.rep1,5800);
+assert.throws(()=>run(r,{action:'debt',id:c,amount:20,reason:'غير مسموح'}));
+assert.throws(()=>run(r,{action:'collection',customerId:c,amount:51}));
+assert.throws(()=>run(r,{action:'sale',customerId:c,lines:cart(3),payment:'cash'}));
+const dep=run(r,{action:'deposit',amount:58,uploadId:'proof'});assert.equal(s.cash.main,100000);run(a,{action:'approve',id:dep.id});assert.equal(s.cash.main,105800);assert.equal(s.cash.rep1,0);
+const back=run(r,{action:'carReturn',lines:cart(1)});run(a,{action:'approve',id:back.id});assert.equal(s.stocks.rep1[p],12);assert.equal(s.stocks.warehouse[p],96);
+const refused=run(r,{action:'load',lines:cart(1)});run(a,{action:'reject',id:refused.id,reason:'اختبار'});assert.equal(s.stocks.rep1[p],12);
+const ret=run(r,{action:'saleReturn',invoiceId:sale.id,lines:cart(4,'piece'),refund:0});assert.equal(ret.status,'pending');assert.equal(s.customers[0].debt,5000);run(a,{action:'approve',id:ret.id});assert.equal(ret.total,3600);assert.equal(ret.lines[0].cost,2000);assert.equal(s.customers[0].debt,1400);assert.equal(s.stocks.rep1[p],16);
+assert.throws(()=>run(r,{action:'saleReturn',invoiceId:sale.id,lines:cart(9,'piece'),refund:0}));
+run(a,{action:'purchase',supplierId:v,lines:cart(10,'piece',10),paid:20});assert.equal(s.suppliers[0].debt,8000);assert.equal(s.cash.main,103800);assert.equal(s.products[0].cost,541);
+run(a,{action:'supplierPay',supplierId:v,amount:30});assert.equal(s.suppliers[0].debt,5000);
+run(a,{action:'target',repId:r.id,month:'2026-10',amount:5000});assert.equal(s.targets['2026-10'].rep1,500000);
+const vis=visible(s,r);assert.equal(vis.cash.main,undefined);assert.deepEqual(vis.suppliers,[]);assert.equal(vis.products[0].cost,undefined);assert.deepEqual(vis.audit,[]);
+assert.throws(()=>run(a,{action:'import',kind:'products',rows:[{code:'P2',name:'A',pack:1,piecePrice:1,cartonPrice:1,cost:1},{code:'P3',name:'B',pack:0,piecePrice:1,cartonPrice:1,cost:1}]}));assert.equal(s.products.length,1);
+console.log('PASS: approvals, cart quantities, stock, cash, credit, returns, purchase costing, targets, permissions and atomic import');
+// Fractional per-piece prices must sum to the original carton value on a complete return.
+s=blank();run(a,{action:'product',name:'تقريب',code:'R1',pack:12,piecePrice:1,cartonPrice:10.01,cost:0.41,minimum:0});const rp=s.products[0].id;run(a,{action:'customer',name:'عميل التقريب',code:'RC'});const rc=s.customers[0].id;run(a,{action:'stock',productId:rp,quantity:12,reason:'اختبار'});const rs=run(a,{action:'sale',customerId:rc,lines:[{productId:rp,unit:'carton',quantity:1}],payment:'credit',paid:0});let returnedValue=0,returnedCost=0;for(let i=0;i<12;i++){const rr=run(a,{action:'saleReturn',invoiceId:rs.id,lines:[{productId:rp,unit:'piece',quantity:1}],refund:0});returnedValue+=rr.total;returnedCost+=rr.lines[0].cost}assert.equal(returnedValue,1001);assert.equal(returnedCost,492);assert.equal(s.customers[0].debt,0);console.log('PASS: partial-return rounding reconciles to exact original price and cost');
+// Different tiers must price both units and never change already-issued invoices.
+s=blank();run(a,{action:'product',name:'أسعار مختلفة',code:'T1',pack:12,piecePrice:10,cartonPrice:108,wholesalePiecePrice:8,wholesaleCartonPrice:90,cost:5,minimum:0});const tp=s.products[0].id;run(a,{action:'customer',name:'عميل السعر',code:'TC'});const tc=s.customers[0].id;run(a,{action:'stock',repId:r.id,productId:tp,quantity:100,reason:'اختبار'});const retail={...r,priceTier:'retail'},wholesale={...r,priceTier:'wholesale'};
+const tSale=run(retail,{action:'sale',customerId:tc,lines:[{productId:tp,unit:'piece',quantity:1,price:10}],payment:'cash'});assert.equal(tSale.total,1000);assert.equal(tSale.priceTier,'retail');
+assert.equal(visible(s,wholesale).products[0].piecePrice,800);assert.equal(visible(s,wholesale).products[0].cartonPrice,9000);assert.equal(visible(s,retail).products[0].wholesalePiecePrice,undefined);
+assert.throws(()=>run(wholesale,{action:'sale',customerId:tc,priceTier:'retail',lines:[{productId:tp,unit:'piece',quantity:1,price:10}],payment:'cash'}));
+const wSale=run(wholesale,{action:'sale',customerId:tc,lines:[{productId:tp,unit:'carton',quantity:2}],payment:'cash'});assert.equal(wSale.total,18000);assert.equal(wSale.lines[0].price,9000);assert.equal(wSale.priceTier,'wholesale');assert.equal(s.documents.find(d=>d.id===tSale.id).total,1000);
+const {fmt,num,date}=await import('../lib/format.ts');assert.equal(fmt(123456),'1,234.56');assert.equal(num(1234),'1,234');assert.doesNotMatch(date('2026-10-06T12:00:00Z'),/[٠-٩]/);console.log('PASS: retail and wholesale pricing, server-enforced rep tier, historical invoice preservation and Latin number/date formatting');

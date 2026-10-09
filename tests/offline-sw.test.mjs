@@ -1,0 +1,9 @@
+import assert from 'node:assert/strict';import vm from 'node:vm';import {readFileSync} from 'node:fs';
+const listeners={},rows=new Map();let connected=true;
+const cache={put:async(key,r)=>rows.set(typeof key==='string'?key:key.url,r),match:async key=>rows.get(typeof key==='string'?key:key.url)};
+const context={URL,Promise,Set,self:{location:{origin:'https://example.test'},addEventListener:(name,fn)=>(listeners[name]??=[]).push(fn),skipWaiting:async()=>{},clients:{claim:async()=>{}}},caches:{open:async()=>cache,match:cache.match,delete:async()=>rows.clear()},fetch:async req=>{if(!connected)throw Error('offline');const url=typeof req==='string'?new URL(req,'https://example.test').href:req.url;return {ok:true,type:'basic',url,headers:{get:()=>url.endsWith('.js')?'text/javascript':'text/html'},text:async()=>'<body data-asad-shell="v1">',clone(){return {...this};}};}};
+vm.runInNewContext(readFileSync('public/offline-sw.js','utf8'),context);
+async function dispatch(url,mode='cors',method='GET'){let promise;const request={url,mode,method};for(const fn of listeners.fetch)fn({request,respondWith:p=>promise=p});return promise?await promise:null;}
+assert.equal(await dispatch('https://example.test/api/office'),null);assert.equal(await dispatch('https://example.test/api/file.png'),null);assert.equal(await dispatch('https://example.test/api/offline-sales','cors','POST'),null);assert.equal(await dispatch('https://another.test/a.js'),null);
+await dispatch('https://example.test/','navigate');await dispatch('https://example.test/assets/app.js');assert.equal(rows.has('/'),true);connected=false;assert.ok(await dispatch('https://example.test/','navigate'));assert.ok(await dispatch('https://example.test/assets/app.js'));assert.equal(await dispatch('https://example.test/api/office'),null);
+console.log('PASS: offline shell/static assets and strict API/mutation/cross-origin cache exclusion');

@@ -1,0 +1,24 @@
+import assert from 'node:assert/strict';
+import {stocktakeQuantity,stocktakeComparison,stocktakeReviewSummary} from '../lib/stocktake-counts.ts';
+import {blank,apply,visible} from '../lib/business.ts';
+import {validateBackup} from '../lib/backup.ts';
+import {defaultWarehousePermissions} from '../lib/warehouse-access.ts';
+assert.deepEqual(stocktakeQuantity({cartons:3,loosePieces:5},12),{actual:41,pack:12,cartons:3,loosePieces:5});
+assert.equal(stocktakeQuantity({cartons:'3',loosePieces:'5'},12).actual,41);assert.equal(stocktakeQuantity({cartons:0,loosePieces:0},12).actual,0);assert.equal(stocktakeQuantity({actual:41},12).actual,41);assert.equal(stocktakeQuantity({loosePieces:25},12).actual,25);
+for(const x of [{cartons:-1},{cartons:1.5},{loosePieces:NaN},{cartons:true},{cartons:100000000},{cartons:1,loosePieces:2,actual:99},{pack:11,cartons:1}])assert.throws(()=>stocktakeQuantity(x,12));
+const admin={id:'admin',name:'مدير',role:'admin'},manager={id:'wm',name:'مسؤول',role:'warehouse',warehouseCategoryId:'kazan',warehousePermissions:defaultWarehousePermissions};let state=blank();
+function run(actor,body){const candidate=structuredClone(state),doc=apply(candidate,actor,body,[]);state=candidate;return doc;}
+function deny(actor,body){const before=structuredClone(state);assert.throws(()=>run(actor,body));assert.deepEqual(state,before);}
+for(let i=0;i<3;i++)run(admin,{action:'product',name:'صنف '+i,code:'S'+i,pack:12,piecePrice:10,cartonPrice:120,cost:5,minimum:0});const ids=state.products.map(p=>p.id);for(const id of ids)run(admin,{action:'stock',productId:id,quantity:30,reason:'افتتاحي'});
+const financiallyBefore=structuredClone({stocks:state.stocks,cash:state.cash,products:state.products,customers:state.customers,suppliers:state.suppliers});
+const doc=run(manager,{action:'stocktake',counts:[{productId:ids[0],cartons:2,loosePieces:6,expected:30},{productId:ids[1],cartons:2,loosePieces:4,expected:30},{productId:ids[2],cartons:3,loosePieces:0,expected:30}]});
+assert.deepEqual({stocks:state.stocks,cash:state.cash,products:state.products,customers:state.customers,suppliers:state.suppliers},financiallyBefore);assert.deepEqual(doc.counts.map(c=>c.actual),[30,28,36]);assert.deepEqual(doc.counts.map(c=>c.pack),[12,12,12]);
+let rows=stocktakeComparison(doc,state.products,state.stocks);assert.deepEqual(rows.map(r=>r.status),['matched','shortage','surplus']);assert.deepEqual(rows.map(r=>r.difference),[0,-2,6]);assert.deepEqual(stocktakeReviewSummary(rows),{matched:1,shortage:1,surplus:1,stale:false});
+const projected=visible(state,manager).documents.find(d=>d.id===doc.id);assert.equal(projected.counts[0].cost,undefined);assert.equal(projected.counts[0].pack,12);assert.equal(projected.counts[0].cartons,2);assert.equal(projected.counts[0].loosePieces,6);
+deny(manager,{action:'approve',id:doc.id});deny(admin,{action:'approve',id:doc.id});run(admin,{action:'approve',id:doc.id,reason:'مراجعة فروق الجرد'});assert.deepEqual(ids.map(id=>state.stocks.warehouse[id]),[30,28,36]);assert.deepEqual(state.cash,financiallyBefore.cash);assert.deepEqual(state.products,financiallyBefore.products);deny(admin,{action:'approve',id:doc.id,reason:'مرة ثانية'});
+assert.deepEqual(validateBackup(state,[admin,manager]),JSON.parse(JSON.stringify(state)));const corrupt=JSON.parse(JSON.stringify(state));corrupt.documents.find(d=>d.id===doc.id).counts[0].cartons=99;assert.throws(()=>validateBackup(corrupt,[admin,manager]));
+const stale=run(manager,{action:'stocktake',counts:[{productId:ids[0],cartons:2,loosePieces:6,expected:30}]});run(admin,{action:'stock',productId:ids[0],quantity:31,reason:'حركة بعد الجرد'});rows=stocktakeComparison(stale,state.products,state.stocks);assert.equal(rows[0].stale,true);assert.equal(rows[0].current,31);deny(admin,{action:'approve',id:stale.id,reason:'محاولة'});
+const fresh=run(manager,{action:'stocktake',counts:[{productId:ids[0],cartons:0,loosePieces:0,expected:31}]});run(admin,{action:'approve',id:fresh.id,reason:'جرد صفري'});assert.equal(state.stocks.warehouse[ids[0]],0);
+const legacy=run(admin,{action:'stocktake',counts:[{productId:ids[1],actual:28}]});delete legacy.counts[0].pack;assert.equal(stocktakeComparison(legacy,state.products,state.stocks)[0].pack,12);run(admin,{action:'approve',id:legacy.id});
+const changedPack=run(manager,{action:'stocktake',counts:[{productId:ids[1],cartons:2,loosePieces:4}]});state.products.find(p=>p.id===ids[1]).pack=10;assert.equal(stocktakeComparison(changedPack,state.products,state.stocks)[0].stale,true);deny(admin,{action:'approve',id:changedPack.id,reason:'تعبئة مختلفة'});
+console.log('PASS: carton/piece and zero/legacy counts, safe exact conversion, matched/shortage/surplus review, hidden costs, reason-required exactly-once settlement, stale balance/pack protection and validated backup roundtrip');

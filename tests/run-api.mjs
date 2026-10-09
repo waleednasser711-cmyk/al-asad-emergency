@@ -1,0 +1,10 @@
+import {spawn,execFileSync} from 'node:child_process';
+import {rm,readdir} from 'node:fs/promises';
+import {resolve as absolutePath} from 'node:path';
+import {randomUUID} from 'node:crypto';
+// Dedicated fixture directory; these checks never touch a hosted database or normal local data.
+const persist=absolutePath('.sites-runtime/api-test-'+randomUUID());
+for(const f of (await readdir('drizzle')).filter(f=>f.endsWith('.sql')).sort())execFileSync(process.execPath,['--import','./scripts/sites-env.mjs','./node_modules/wrangler/bin/wrangler.js','d1','execute','DB','--local','--config','dist/server/wrangler.json','--persist-to',persist,'--file','drizzle/'+f],{stdio:'pipe'});
+const server=spawn(process.execPath,['--import','./scripts/sites-env.mjs','./node_modules/wrangler/bin/wrangler.js','dev','--config','dist/server/wrangler.json','--local','--persist-to',persist,'--ip','127.0.0.1','--inspector-port','0','--port','8787','--var','ASAD_RECOVERY_OWNER_EMAIL:owner@example.test'],{cwd:process.cwd(),detached:true,stdio:['ignore','pipe','pipe']});let log='';server.stdout.on('data',d=>log+=d);server.stderr.on('data',d=>log+=d);
+try{let ready=false;for(let i=0;i<100;i++){try{const r=await fetch('http://127.0.0.1:8787/api/office');if(r.status===200){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,200))}if(!ready)throw new Error('Server failed: '+log.slice(-1800));const exitCode=await new Promise(resolve=>{const tests=spawn(process.execPath,['--max-old-space-size=256',process.argv[2]||'tests/api.test.mjs'],{stdio:'inherit'});tests.on('error',error=>{console.error(error);resolve(1)});tests.on('exit',(code,signal)=>{if(signal)console.error('API tests interrupted by '+signal);resolve(code??1)})});if(exitCode)process.exitCode=exitCode;}
+finally{const stopped=new Promise(resolve=>server.once('exit',resolve));try{process.kill(-server.pid,'SIGTERM')}catch{}await Promise.race([stopped,new Promise(resolve=>setTimeout(resolve,3000))]);await rm(persist,{recursive:true,force:true,maxRetries:5,retryDelay:200});}

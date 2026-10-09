@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {bindRepDialogViewport} from '../lib/rep-dialog-viewport.ts';
+const vars=new Map(),listeners=new Map(),dialog={style:{setProperty:(k,v)=>vars.set(k,v),removeProperty:k=>vars.delete(k)}},viewport={height:740,offsetTop:0,addEventListener:(k,v)=>listeners.set(k,v),removeEventListener:(k,v)=>{assert.equal(listeners.get(k),v);listeners.delete(k)}};
+const cleanup=bindRepDialogViewport(dialog,viewport);assert.equal(vars.get('--rep-viewport-height'),'740px');assert.equal(vars.get('--rep-viewport-top'),'0px');
+viewport.height=390;viewport.offsetTop=120;listeners.get('resize')();assert.equal(vars.get('--rep-viewport-height'),'390px');assert.equal(vars.get('--rep-viewport-top'),'120px');
+viewport.offsetTop=40;listeners.get('scroll')();assert.equal(vars.get('--rep-viewport-top'),'40px');cleanup();assert.equal(listeners.size,0);assert.equal(vars.size,0);
+const page=readFileSync('app/page.tsx','utf8'),css=readFileSync('app/globals.css','utf8'),navigation=readFileSync('components/office-navigation-button.tsx','utf8');
+assert.match(page,/!admin&&\['sale','load','saleReturn'\]\.includes\(modal\?\.kind\)\?' rep-entry-dialog'/);assert.match(page,/!admin&&\['sale','load','saleReturn'\]\.includes\(modal\?\.kind\)&&<RepEntryViewport/);
+assert.match(navigation,/onSelect\(\);if\(isMobile\)setOpenMobile\(false\)/);assert.doesNotMatch(navigation,/fetch\(|setOpen\(/);
+const patch=css.slice(css.indexOf('/* Mobile sidebar portal'));
+assert.match(patch,/@media screen and \(max-width:767px\)/);assert.match(patch,/\[data-sidebar=sidebar\]\[data-mobile=true\].*background:#0f2032!important/);assert.match(patch,/width:calc\(100vw - 24px\)!important;max-width:calc\(100vw - 24px\)!important/);assert.match(patch,/max-height:calc\(var\(--rep-viewport-height,100dvh\) - 24px\)/);assert.match(patch,/\.rep-entry-dialog \.form-grid\{grid-template-columns:minmax\(0,1fr\)/);assert.match(patch,/\.rep-entry-dialog \.toolbar\{display:grid;grid-template-columns:minmax\(0,1fr\)/);assert.match(patch,/\.rep-entry-dialog \.table-wrap.*overflow:auto/);
+console.log('PASS: visual viewport keyboard resize/scroll and listener/style cleanup, rep sale/load/sale-return-only mobile scope, mobile-only navigation closing, opaque portal sidebar, constrained form widths, single-column fields/barcode and internally scrollable cart. Physical phone layout still needs user verification.');

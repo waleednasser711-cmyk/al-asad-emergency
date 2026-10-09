@@ -1,0 +1,17 @@
+import {normalizeWarehouseAccount} from './warehouse-access';
+import {db} from './database';
+export const hex=(b:ArrayBuffer)=>Array.from(new Uint8Array(b),n=>n.toString(16).padStart(2,'0')).join('');
+export async function digest(v:string){return hex(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(v)))}
+export async function password(v:string,salt:string){const key=await crypto.subtle.importKey('raw',new TextEncoder().encode(v),'PBKDF2',false,['deriveBits']);return hex(await crypto.subtle.deriveBits({name:'PBKDF2',salt:new TextEncoder().encode(salt),iterations:100000,hash:'SHA-256'},key,256))}
+const browserToken=(req:Request)=>req.headers.get('cookie')?.match(/(?:^|;\s*)asad_device=([^;]+)/)?.[1]||'';
+export async function current(req:Request){const token=req.headers.get('cookie')?.match(/(?:^|;\s*)asad_session=([^;]+)/)?.[1];if(!token)return null;return normalizeWarehouseAccount(await db().prepare("SELECT u.id,u.name,u.username,u.role,u.active,u.price_tier AS priceTier,u.warehouse_category AS warehouseCategoryId,u.warehouse_permissions AS warehousePermissions,s.device_id AS deviceId,s.expires AS sessionExpires FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=? AND s.expires>? AND u.active=1 AND (u.role!='rep' OR EXISTS(SELECT 1 FROM rep_devices rd WHERE rd.id=s.device_id AND rd.user_id=u.id AND rd.status='approved' AND rd.token_hash=?))").bind(await digest(token),Date.now(),await digest(browserToken(req))).first())}
+export async function session(id:string,deviceId?:string){const token=crypto.randomUUID()+crypto.randomUUID();const result=await db().prepare("INSERT INTO sessions(token,user_id,expires,device_id) SELECT ?,u.id,?,? FROM users u WHERE u.id=? AND u.active=1 AND (u.role!='rep' OR EXISTS(SELECT 1 FROM rep_devices rd WHERE rd.id=? AND rd.user_id=u.id AND rd.status='approved'))").bind(await digest(token),Date.now()+7*86400000,deviceId||null,id,deviceId||null).run();if(!result.meta.changes)throw new Error('الجهاز غير معتمد؛ اطلب موافقة الحساب الرئيسي');return `asad_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=604800`}
+/** Browser secret is HttpOnly; never return/store the raw credential in business data. */
+export async function repDeviceLogin(req:Request,userId:string){
+ let token=browserToken(req);if(!/^[a-f0-9-]{72}$/.test(token))token=crypto.randomUUID()+crypto.randomUUID();
+ const hash=await digest(token),d=db(),id=crypto.randomUUID(),name=(req.headers.get('user-agent')||'متصفح غير معروف').slice(0,240);
+ await d.prepare("INSERT INTO rep_devices(id,user_id,token_hash,name,status,requested_at) VALUES (?,?,?,?,'pending',?) ON CONFLICT(user_id,token_hash) DO NOTHING").bind(id,userId,hash,name,new Date().toISOString()).run();
+ const device=await d.prepare('SELECT id,status FROM rep_devices WHERE user_id=? AND token_hash=?').bind(userId,hash).first();
+ return {device,cookie:`asad_device=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`};
+}
+export async function rate(key:string){const d=db(),now=Date.now();await d.prepare('INSERT INTO attempts(key,count,start) VALUES (?,1,?) ON CONFLICT(key) DO UPDATE SET count=CASE WHEN start<? THEN 1 ELSE count+1 END,start=CASE WHEN start<? THEN ? ELSE start END').bind(key,now,now-900000,now-900000,now).run();const r=await d.prepare('SELECT count FROM attempts WHERE key=?').bind(key).first();if(r.count>15)throw new Error('محاولات دخول كثيرة؛ انتظر 15 دقيقة')}

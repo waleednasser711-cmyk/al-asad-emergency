@@ -1,0 +1,55 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1791284041620,
+      "tag": "0000_perfect_namora",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1791284344217,
+      "tag": "0001_steep_paper_doll",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791288769643,
+      "tag": "0002_daily_wrecker",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791291321908,
+      "tag": "0003_careless_morg",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791294740667,
+      "tag": "0004_quick_argent",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791481146576,
+      "tag": "0005_cloudy_unicorn",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791509967235,
+      "tag": "0006_slimy_lionheart",
+      "breakpoints": true
+    }
+  ]
+}

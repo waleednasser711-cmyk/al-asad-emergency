@@ -1,0 +1,7 @@
+const enc=new TextEncoder();
+const b64=(bytes:Uint8Array)=>btoa(String.fromCharCode(...bytes)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const unb64=(s:string)=>Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
+const key=(hash:string)=>crypto.subtle.importKey('raw',enc.encode(hash),{name:'HMAC',hash:'SHA-256'},false,['sign','verify']);
+export function recoveryOwner(req:Request,email:string){const subject=req.headers.get('oai-authenticated-user-id'),claim=req.headers.get('oai-authenticated-user-email');return !!subject&&!!claim&&!!email&&claim.trim().toLowerCase()===email.trim().toLowerCase();}
+export async function makeRecoveryToken(hash:string,subject:string,revision:number,now=Date.now()){const payload=b64(enc.encode(JSON.stringify({subject,revision,expires:now+600000,nonce:crypto.randomUUID()})));return payload+'.'+b64(new Uint8Array(await crypto.subtle.sign('HMAC',await key(hash),enc.encode(payload))));}
+export async function validRecoveryToken(token:any,hash:string,subject:string,revision:number,now=Date.now()){try{if(typeof token!=='string'||token.length>3000)return false;const parts=token.split('.');if(parts.length!==2||!await crypto.subtle.verify('HMAC',await key(hash),unb64(parts[1]),enc.encode(parts[0])))return false;const value=JSON.parse(new TextDecoder().decode(unb64(parts[0])));return value.subject===subject&&value.revision===revision&&Number.isSafeInteger(value.expires)&&value.expires>now&&value.expires<=now+600000&&typeof value.nonce==='string';}catch{return false;}}

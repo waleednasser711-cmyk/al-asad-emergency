@@ -1,0 +1,7 @@
+import {current} from '@/lib/auth';
+import {db,bucket} from '@/lib/database';
+import {runBackup,backupStatus,backupDownload} from '@/lib/server-backups';
+export const dynamic='force-dynamic';
+const json=(value:any,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store'}});
+export async function GET(req:Request){try{const user=await current(req);if(user?.role!=='admin')return json({error:'النسخ للحساب الرئيسي فقط'},403);const id=new URL(req.url).searchParams.get('id');if(!id)return json({backups:await backupStatus()});const row=await db().prepare("SELECT * FROM automatic_backups WHERE id=? AND status='succeeded'").bind(id).first();if(!row)return json({error:'النسخة غير متاحة'},404);return new Response(await backupDownload(id),{headers:{'Content-Type':'application/zip','Content-Disposition':`attachment; filename="al-asad-${row.day}.zip"`,'Cache-Control':'private, no-store'}});}catch(e:any){return json({error:'تعذر تحميل النسخ الاحتياطية'},503);}}
+export async function POST(req:Request){try{if(req.headers.get('origin')!==new URL(req.url).origin)return json({error:'مصدر غير مسموح'},403);const user=await current(req);if(user?.role!=='admin')return json({error:'النسخ للحساب الرئيسي فقط'},403);const body:any=await req.json().catch(()=>({}));const backup=await runBackup('manual',body.id);return json({backup},backup.status==='failed'?500:200);}catch(e:any){return json({error:'تعذر إنشاء النسخة'},503);}}

@@ -1,0 +1,5 @@
+import {current} from '@/lib/auth';
+import {check} from '@/lib/business';
+import {startRestore,uploadPart,commitRestore,cancelRestore} from '@/lib/staged-restore';
+export const dynamic='force-dynamic';
+export async function POST(req:Request){try{check(req.headers.get('origin')===new URL(req.url).origin,'مصدر غير مسموح');const a=await current(req);if(a?.role!=='admin')return Response.json({error:'الاسترجاع للحساب الرئيسي فقط'},{status:403});const url=new URL(req.url),id=url.searchParams.get('id'),path=url.searchParams.get('path');if(id&&path)return Response.json(await uploadPart(a,id,path,req));check(Number(req.headers.get('content-length')||0)<=2*1024*1024,'طلب كبير');const b:any=await req.json();if(b.action==='start')return Response.json(await startRestore(a,b.manifest));if(b.action==='cancel')return Response.json(await cancelRestore(a,b.id));if(b.action==='commit')return Response.json(await commitRestore(a,b.id));throw new Error('طلب غير صالح');}catch(e:any){return Response.json({error:e.message||'تعذر الاسترجاع؛ البيانات الحالية لم تتغير'},{status:400});}}

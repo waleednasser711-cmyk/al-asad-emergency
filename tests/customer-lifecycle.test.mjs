@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import {blank,apply,visible} from '../lib/business.ts';
+import {customerCanDelete,saleCustomers} from '../lib/customer-lifecycle.ts';
+import {validateBackup} from '../lib/backup.ts';
+import {createReports} from '../lib/reports.ts';
+import {accountStatement} from '../lib/statements.ts';
+const admin={id:'admin',name:'المدير',role:'admin'},rep={id:'rep',name:'المندوب',role:'rep'},ids=['rep'];
+let state=blank();const run=(actor,body)=>{const candidate=structuredClone(state);const result=apply(candidate,actor,body,ids);state=candidate;return result};
+run(admin,{action:'customer',name:'عميل جديد',code:'EMPTY'});const empty=state.customers[0].id;
+for(const action of ['deleteCustomer','archiveCustomer','reactivateCustomer']){const before=structuredClone(state);assert.throws(()=>run(rep,{action,id:empty}),/الرئيسي/);assert.deepEqual(state,before)}
+assert.equal(customerCanDelete(state.customers[0],state.documents),true);
+const untouched=structuredClone(state);run(admin,{action:'deleteCustomer',id:empty});assert.equal(state.customers.length,0);
+for(const key of ['products','stocks','cash','documents','ledger','suppliers','targets','settings'])assert.deepEqual(state[key],untouched[key]);assert.equal(state.audit.at(-1).actorId,admin.id);assert.equal(state.audit.at(-1).customerId,empty);assert.ok(state.audit.at(-1).at);assert.match(state.audit.at(-1).detail,/EMPTY/);
+assert.throws(()=>run(admin,{action:'deleteCustomer',id:empty}),/غير موجود/);
+for(const debt of [1,100000])assert.equal(customerCanDelete({id:'c',debt},[]),false);
+for(const doc of [{customerId:'c',type:'sale'},{customerId:'c',type:'collection'},{customerId:'c',type:'debt',status:'rejected'},{customer:{id:'c'},type:'customerRequest',status:'pending'},{customer:{id:'c'},type:'customerRequest',status:'approved'}])assert.equal(customerCanDelete({id:'c',debt:0},[doc]),false);
+run(admin,{action:'product',name:'صنف',code:'P',pack:1,piecePrice:10,cartonPrice:10,cost:5,minimum:0});const pid=state.products[0].id;
+run(admin,{action:'customer',name:'عميل له حركات',code:'HISTORY'});const cid=state.customers[0].id;
+run(admin,{action:'stock',productId:pid,quantity:10,reason:'اختبار'});
+const sale=run(admin,{action:'sale',customerId:cid,payment:'credit',lines:[{productId:pid,quantity:2,unit:'piece'}]});
+const statement=accountStatement(state,cid),report=createReports(state,[],{},'2026-10').profit(),before=structuredClone(state);
+assert.throws(()=>run(admin,{action:'deleteCustomer',id:cid}),/لا يمكن حذف/);assert.deepEqual(state,before);
+run(admin,{action:'archiveCustomer',id:cid});assert.equal(state.customers[0].archived,true);assert.equal(state.customers[0].debt,2000);
+assert.deepEqual(accountStatement(state,cid),statement);assert.deepEqual(createReports(state,[],{},'2026-10').profit(),report);
+for(const key of ['products','stocks','cash','documents','ledger','suppliers','targets','settings'])assert.deepEqual(state[key],before[key]);
+assert.equal(saleCustomers(state.customers).length,0);assert.equal(visible(state,rep).customers[0].debt,2000);
+for(const actor of [admin,rep]){const unchanged=structuredClone(state);assert.throws(()=>run(actor,{action:'sale',customerId:cid,payment:'cash',lines:[{productId:pid,quantity:1,unit:'piece'}]}),/مؤرشف/);assert.deepEqual(state,unchanged)}
+const restored=validateBackup(state,[admin,rep]);assert.equal(restored.customers[0].archived,true);assert.deepEqual(restored.customers[0],state.customers[0]);
+run(admin,{action:'import',kind:'customers',rows:[{code:'HISTORY',name:'اسم محدث',phone:'',address:''}]});assert.equal(state.customers[0].archived,true);
+run(rep,{action:'collection',customerId:cid,amount:10});assert.equal(state.customers[0].debt,1000);
+run(admin,{action:'saleReturn',invoiceId:sale.id,lines:[{productId:pid,quantity:1,unit:'piece'}]});assert.equal(state.customers[0].debt,0);
+assert.equal(customerCanDelete(state.customers[0],state.documents),false);assert.throws(()=>run(admin,{action:'deleteCustomer',id:cid}),/لا يمكن حذف/);
+run(admin,{action:'reactivateCustomer',id:cid});assert.equal(state.customers[0].archived,false);assert.equal(saleCustomers(state.customers).length,1);
+run(admin,{action:'sale',customerId:cid,payment:'cash',lines:[{productId:pid,quantity:1,unit:'piece'}]});
+assert.throws(()=>run(admin,{action:'reactivateCustomer',id:cid}),/حالة العميل/);
+const legacy=structuredClone(state);delete legacy.customers[0].archived;assert.equal(validateBackup(legacy,[admin,rep]).customers[0].archived,undefined);
+console.log('PASS: customer deletion protection, admin-only lifecycle, archive/reactivation, sale refusal, collection/return continuity, unchanged balances/reports and legacy/new backup compatibility');

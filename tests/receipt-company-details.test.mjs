@@ -1,0 +1,20 @@
+import assert from 'node:assert/strict';
+import {blank,apply} from '../lib/business.ts';
+import {validateBackup} from '../lib/backup.ts';
+import {readFileSync} from 'node:fs';
+const admin={id:'admin',role:'admin',name:'مدير'},rep={id:'rep',role:'rep',name:'مندوب'};
+const s=blank(),before=structuredClone(s);
+apply(s,admin,{action:'settings',...s.settings,commercialRegister:' 00123 ',taxCard:'123-456-789'},['rep']);
+assert.equal(s.settings.commercialRegister,'00123');assert.equal(s.settings.taxCard,'123-456-789');
+for(const key of ['products','customers','suppliers','stocks','cash','documents','ledger','targets'])assert.deepEqual(s[key],before[key]);
+assert.throws(()=>apply(structuredClone(s),rep,{action:'settings',...s.settings,taxCard:'bad'},['rep']));
+assert.deepEqual(validateBackup(s,[admin,rep]).settings,s.settings);
+assert.deepEqual(validateBackup(before,[admin,rep]).settings,before.settings);
+apply(s,admin,{action:'settings',name:s.settings.name,paper:'104'},['rep']);assert.equal(s.settings.commercialRegister,'00123');assert.equal(s.settings.taxCard,'123-456-789');
+apply(s,admin,{action:'settings',...s.settings,commercialRegister:'',taxCard:''},['rep']);assert.equal(s.settings.commercialRegister,'');assert.equal(s.settings.taxCard,'');
+const page=readFileSync('app/page.tsx','utf8'),css=readFileSync('app/globals.css','utf8');
+assert.match(page,/ReceiptPreview compact=\{!admin\}/);assert.match(page,/admin\?'المستخدم':'اسم المندوب'/);assert.match(page,/admin&&receipt.priceTier/);assert.match(page,/!admin&&s.settings.commercialRegister/);assert.match(page,/if\(!admin\)\{await document.fonts.ready;const canvas=directReceiptCanvas/);
+assert.match(css,/\.rep-receipt-dialog \.receipt-actions\{flex:none/);assert.match(css,/\.rep-receipt-dialog \.receipt-preview\{flex:1;min-height:0;overflow:auto/);
+console.log('PASS: optional company identifiers preserve leading zeroes, admin-only updates, business data unchanged, old/new backup compatibility, omission retention and explicit clearing, rep preview/footer scope and matching image export.');
+
+const {receiptWithCustomer}=await import('../lib/receipt-customer.ts');const invoice={customerId:'c1',customerName:'عميل',total:28500},clients=[{id:'c2',phone:'wrong',address:'wrong'},{id:'c1',phone:'01001234567',address:'عنوان العميل'}],original=structuredClone({invoice,clients});const enriched=receiptWithCustomer(invoice,clients);assert.equal(enriched.customerPhone,'01001234567');assert.equal(enriched.customerAddress,'عنوان العميل');assert.deepEqual({invoice,clients},original);assert.equal(receiptWithCustomer(invoice,[]).customerPhone,'');assert.equal(receiptWithCustomer({...invoice,customerPhone:'001',customerAddress:'عنوان تاريخي'},clients).customerPhone,'001');

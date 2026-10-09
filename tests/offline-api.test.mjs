@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import {approvedTestLogin,cookieHeader} from './rep-device-fixture.mjs';
+import {localSale} from '../lib/offline-sales.ts';
+import {validateBackup} from '../lib/backup.ts';
+import {accountSalesSummary} from '../lib/sales-summary.ts';
+const origin='http://127.0.0.1:8787';let admin='';
+const raw=(path,body,cookie='',extra={})=>fetch(origin+path,{method:'POST',headers:{origin,cookie,'Content-Type':'application/json',...extra},body:JSON.stringify(body)});
+const get=async cookie=>(await fetch(origin+'/api/office',{headers:{cookie}})).json();
+const login=async username=>{const r=await approvedTestLogin((body,cookie)=>raw('/api/office',body,cookie),{action:'login',username,password:'123'},admin);assert.equal(r.status,200,await r.clone().text());return cookieHeader(r);};
+assert.equal((await raw('/api/office',{action:'setup',name:'مدير',username:'ad',password:'123'},'',{'oai-authenticated-user-id':'fixture'})).status,200);
+admin=await login('ad');
+const post=async (body,cookie=admin)=>{const before=await get(cookie),r=await raw('/api/office',{...body,revision:before.revision,requestId:crypto.randomUUID()},cookie);assert.equal(r.status,200,await r.clone().text());return r.json();};
+await post({action:'user',name:'مندوب',username:'rp',password:'123'});await post({action:'user',name:'مندوب آخر',username:'r2',password:'123'});
+const repCookie=await login('rp'),otherCookie=await login('r2'),rep=(await get(repCookie)).user;
+await post({action:'product',name:'صنف',code:'p',pack:4,piecePrice:10,cartonPrice:40,cost:5,minimum:0});await post({action:'customer',name:'عميل',code:'c',phone:'01',address:'العنوان'});
+let current=await get(admin);const product=current.state.products[0],customer=current.state.customers[0];
+await post({action:'stock',repId:rep.id,productId:product.id,quantity:100,reason:'افتتاحي'});
+const sale=(data,payment='cash',quantity=1,paid=0)=>localSale(data,{customerId:customer.id,payment,paid,lines:[{productId:product.id,unit:'carton',quantity,price:40}]},crypto.randomUUID());
+const send=async (q,cookie=repCookie)=>{const r=await raw('/api/offline-sales',{payload:q.payload},cookie);assert.equal(r.status,200,await r.clone().text());return r.json();};
+const q=sale(await get(repCookie));const pair=await Promise.all([send(q),send(q)]);assert.equal(pair[0].document.id,pair[1].document.id);assert.equal(pair[0].document.lines[0].cost,undefined);
+let state=(await get(admin)).state;assert.equal(state.cash[rep.id],4000);assert.equal(state.stocks[rep.id][product.id],96);assert.equal(state.documents.filter(d=>d.offlineId===q.id).length,1);
+// Simulate losing the response then retrying after another independent mutation.
+await post({action:'cashOpening',amount:10});const retry=await send(q);assert.equal(retry.document.id,pair[0].document.id);assert.equal((await get(admin)).state.cash[rep.id],4000);
+assert.equal((await get(repCookie)).syncedSaleIds.includes(q.id),true);
+const altered=structuredClone(q);altered.payload.lines[0].quantity=2;assert.equal((await raw('/api/offline-sales',{payload:altered.payload},repCookie)).status,400);
+assert.equal((await raw('/api/offline-sales',{payload:q.payload},otherCookie)).status,400);assert.equal((await raw('/api/offline-sales',{payload:q.payload},admin)).status,400);assert.equal((await raw('/api/offline-sales',{payload:q.payload})).status,401);
+const c=sale(await get(repCookie),'credit',2,5);const creditResult=await send(c);assert.equal(creditResult.ok,true);state=(await get(admin)).state;assert.equal(state.cash[rep.id],4500);assert.equal(state.customers[0].debt,7500);assert.equal(state.stocks[rep.id][product.id],88);assert.equal(accountSalesSummary(state,rep.id).netSales,12000);
+const shortage=sale(await get(repCookie),'cash',3);await post({action:'stock',repId:rep.id,productId:product.id,quantity:0,reason:'تعارض'});const before=(await get(admin)).state;
+const conflict=await send(shortage);assert.equal(conflict.review,true);const again=await send(shortage);assert.equal(again.requestId,conflict.requestId);
+state=(await get(admin)).state;for(const key of ['cash','stocks','customers','ledger'])assert.deepEqual(state[key],before[key]);assert.equal(accountSalesSummary(state,rep.id).netSales,12000);assert.equal(state.documents.filter(d=>d.offlineId===shortage.id).length,1);validateBackup(state,(await get(admin)).users);
+assert.equal((await raw('/api/offline-sales',{action:'review',id:shortage.id,actorId:rep.id,reason:'سبب'},repCookie)).status,400);
+assert.equal((await raw('/api/offline-sales',{action:'review',id:shortage.id,actorId:rep.id,reason:''},admin)).status,400);
+assert.equal((await raw('/api/offline-sales',{action:'review',id:shortage.id,actorId:rep.id,reason:'مراجعة'},admin)).status,409);
+await post({action:'stock',repId:rep.id,productId:product.id,quantity:80,reason:'حل تعارض'});
+assert.equal((await send(shortage)).review,true,'Only admin may resolve a recorded conflict');
+const review=async q=>{const r=await raw('/api/offline-sales',{action:'review',id:q.id,actorId:rep.id,reason:'مراجعة المدير وتسوية التعارض'},admin);assert.equal(r.status,200,await r.clone().text());return r.json();};
+const reviewed=await review(shortage);assert.equal(reviewed.document.actorId,rep.id);assert.equal(reviewed.document.reviewedBy,'admin');assert.equal((await review(shortage)).document.id,reviewed.document.id);assert.equal((await send(shortage)).document.id,reviewed.document.id);
+state=(await get(admin)).state;assert.equal(state.cash[rep.id],16500);assert.equal(state.stocks[rep.id][product.id],68);assert.equal(accountSalesSummary(state,rep.id).netSales,24000);assert.equal(state.documents.some(d=>d.type==='offlineSale'&&d.offlineId===shortage.id),false);
+// Live credit policy conflict, no partial financial posting; admin override remains explicitly reasoned.
+const policySale=sale(await get(repCookie),'credit',1);await post({...state.customers[0],action:'customer',creditEnabled:true,creditLimit:75});const policyBefore=(await get(admin)).state;assert.equal((await send(policySale)).review,true);state=(await get(admin)).state;for(const key of ['cash','stocks','customers','ledger'])assert.deepEqual(state[key],policyBefore[key]);await review(policySale);state=(await get(admin)).state;assert.equal(state.customers[0].debt,11500);assert.equal(state.cash[rep.id],16500);assert.equal(state.stocks[rep.id][product.id],64);
+validateBackup(state,(await get(admin)).users);
+// The old normal online API still works, with its original revision and request-token semantics.
+await post({action:'sale',customerId:customer.id,payment:'cash',lines:[{productId:product.id,quantity:1,unit:'piece',price:10}]},repCookie);state=(await get(admin)).state;assert.equal(state.cash[rep.id],17500);assert.equal(state.stocks[rep.id][product.id],63);assert.equal(accountSalesSummary(state,rep.id).netSales,29000);
+console.log('PASS: isolated D1 cash/credit posting, parallel/lost-response deduplication, payload/role protection, durable no-effect conflicts, admin-only reasoned review/override, backup roundtrip, reports and original online API');

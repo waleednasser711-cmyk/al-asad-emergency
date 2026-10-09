@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import {blank,apply,visible} from '../lib/business.ts';
+const s=blank(),admin={id:'a',name:'مدير',role:'admin'},r={id:'r',name:'مندوب',role:'rep'},other={...r,id:'o'};
+s.settings.productCategories=[{id:'one',name:'قسم واحد'},{id:'two',name:'قسم آخر'},{id:'legacy',name:'قديم'}];
+const product=(id,categoryId,repIds)=>({id,code:id,name:id,categoryId,pack:6,cost:500,piecePrice:1000,cartonPrice:6000,...(repIds===undefined?{}:{repIds})});
+s.products=[product('shared','one',['r','o']),product('other','two',['o']),product('old','legacy'),product('removed','two',[])];
+s.stocks={warehouse:{shared:12,other:24,old:6,removed:5},r:{removed:3}};s.cash={main:100,r:200};
+s.documents=[{id:'load',type:'load',repId:'r',actorId:'r',status:'approved',lines:[{productId:'removed',cost:500}]}];
+const before=structuredClone(s),projected=visible(s,r);
+assert.deepEqual(projected.settings.productCategories,[s.settings.productCategories[0]]);
+assert.equal(projected.products.find(p=>p.id==='shared').assignedToCurrentRep,true);
+assert.equal(projected.products.find(p=>p.id==='old').assignedToCurrentRep,false);
+assert.equal(projected.products.find(p=>p.id==='removed').assignedToCurrentRep,false);
+assert.equal(projected.stocks.r.removed,3);assert.equal(projected.documents.length,1);
+assert.deepEqual(s,before);assert.equal(visible(s,admin),s);
+assert.deepEqual(visible(s,other).settings.productCategories,s.settings.productCategories.slice(0,2));
+assert.deepEqual(visible(s,{...r,id:'none'}).settings.productCategories,[]);
+// Saving a legacy selection makes its chosen categories explicit without changing money/history.
+apply(s,admin,{action:'assignRep',repId:'r',customerIds:[],productIds:['shared','old']},['r','o']);
+assert.deepEqual(s.products.find(p=>p.id==='old').repIds,['r','o']);
+assert.deepEqual(visible(s,r).settings.productCategories.map(c=>c.id),['one','legacy']);
+for(const key of ['stocks','cash','documents','ledger'])assert.deepEqual(s[key],before[key]);
+apply(s,admin,{action:'assignRep',repId:'r',customerIds:[],productIds:[]},['r','o']);
+assert.deepEqual(visible(s,r).settings.productCategories,[]);assert.equal(visible(s,r).stocks.r.removed,3);
+console.log('PASS: explicit rep categories, shared assignments, removal/empty catalog, legacy selection, unchanged balances/history and admin visibility');
